@@ -1,0 +1,3 @@
+- insert:
+    - id: cursor
+      name: ./dist/host/19bcfa73f357/index.js
