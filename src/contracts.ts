@@ -74,6 +74,8 @@ export type CursorEvent =
   | { type: 'tool'; callKey: string; name: string; arguments: string }
   | { type: 'tools-listed'; count: number }
   | { type: 'usage'; usage: CursorUsage }
+  /** One model call's own billing counters, before the turn's aggregate usage. */
+  | { type: 'call-usage'; usage: CursorUsage }
   | { type: 'done'; reason: 'stop' | 'max-tokens' }
 export interface CursorRun {
   readonly events: AsyncIterable<CursorEvent>

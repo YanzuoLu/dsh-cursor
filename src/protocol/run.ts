@@ -9,7 +9,7 @@ import { RunEvents } from './events.js'
 import { CursorProtocolError, LIMITS, limitError, safeError } from './errors.js'
 import { activeUserIndex, buildResumeRequest, buildRunRequest, messagesDigest, userMessage } from './history.js'
 import { WireAgentClientMessageSchema, WireAgentServerMessageSchema } from './schema.js'
-import type { WireAgentServerMessage, WireInteractionUpdate, WireTurnEnded } from './schema.js'
+import type { WireAgentServerMessage, WireInteractionUpdate, WireModelCallCompleted, WireTurnEnded } from './schema.js'
 import { H2Channel, RUN_PATH, DEFAULT_ENDPOINT, frameMessage, requestUnary, validateTransport } from './transport.js'
 import type { RunChannel } from './transport.js'
 import { SplitChannel } from './split.js'
@@ -20,6 +20,24 @@ import {
   ShellAllowlistPrecheckResultSchema, ThinkingDetailsSchema, WebFetchAllowlistPrecheckResultSchema,
 } from './vendor/agent_pb.js'
 import type { AgentClientMessage, AgentRunRequest, ConversationStateStructure, ExecServerMessage, McpToolDefinition } from './vendor/agent_pb.js'
+
+/**
+ * Cursor's token counters. Its input includes cached reads and writes; the
+ * returned input is disjoint from them, as native DSH input is.
+ */
+function tokenCounters(counters: WireTurnEnded | WireModelCallCompleted): Partial<CursorUsage> {
+  const usage: Partial<CursorUsage> = {}
+  for (const name of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens'] as const) {
+    const value = counters[name]
+    if (value === undefined) continue
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) throw new CursorProtocolError('INVALID_RESPONSE', 'Invalid Cursor token count')
+    usage[name] = Number(value)
+  }
+  if (usage.inputTokens !== undefined) {
+    usage.inputTokens = Math.max(0, usage.inputTokens - (usage.cacheReadTokens ?? 0) - (usage.cacheWriteTokens ?? 0))
+  }
+  return usage
+}
 
 /** Owns one wire Run only. Session/account eviction belongs to its coordinator. */
 class CursorConnection implements CursorRun {
@@ -381,6 +399,13 @@ class CursorConnection implements CursorRun {
       case 'toolRequestsListed':
         this.events.push({ type: 'tools-listed', count: update.message.value.callCount })
         return
+      case 'modelCallCompleted': {
+        const counters = tokenCounters(update.message.value)
+        if (counters.inputTokens !== undefined || counters.outputTokens !== undefined) {
+          this.events.push({ type: 'call-usage', usage: { inputTokens: 0, outputTokens: 0, ...counters } })
+        }
+        return
+      }
       case 'turnEnded':
         if (this.#ended || this.#pending.size) throw new CursorProtocolError('INVALID_RESPONSE', 'Invalid Cursor terminal turn state')
         this.#ended = update.message.value
@@ -399,19 +424,10 @@ class CursorConnection implements CursorRun {
   }
 
   #applyFinalUsage(ended: WireTurnEnded): void {
-    for (const name of ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens'] as const) {
-      const value = ended[name]
-      if (value === undefined) continue
-      if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) throw new CursorProtocolError('INVALID_RESPONSE', 'Invalid Cursor token count')
-      this.#usage[name] = Number(value)
-      this.#haveUsage = true
-    }
-    // Cursor's final input includes cached reads and writes; native DSH input
-    // is disjoint. Streamed tokenDelta estimates are only booked at finality.
-    if (ended.inputTokens !== undefined) {
-      this.#usage.inputTokens = Math.max(0, Number(ended.inputTokens)
-        - (this.#usage.cacheReadTokens ?? 0) - (this.#usage.cacheWriteTokens ?? 0))
-    }
+    const counters = tokenCounters(ended)
+    if (Object.keys(counters).length) this.#haveUsage = true
+    // Streamed tokenDelta estimates are only booked at finality.
+    Object.assign(this.#usage, counters)
   }
 
   async reply(callKey: string, result: CursorToolResult): Promise<void> {

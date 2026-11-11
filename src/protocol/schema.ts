@@ -29,9 +29,19 @@ export type WireTurnEnded = TurnEndedUpdate & {
   cacheWriteTokens?: bigint
   reasoningTokens?: bigint
 }
+export type WireModelCallCompleted = {
+  $typeName: 'agent.v1.ModelCallCompletedUpdate'
+  modelCallId: string
+  inputTokens?: bigint
+  outputTokens?: bigint
+  cacheReadTokens?: bigint
+  cacheWriteTokens?: bigint
+  reasoningTokens?: bigint
+}
 export type WireInteractionUpdate = Omit<InteractionUpdate, 'message'> & {
   message: Exclude<InteractionUpdate['message'], { case: 'turnEnded' }>
     | { case: 'turnEnded'; value: WireTurnEnded }
+    | { case: 'modelCallCompleted'; value: WireModelCallCompleted }
     | { case: 'toolRequestsListed'; value: { $typeName: 'agent.v1.ToolRequestsListedUpdate'; callCount: number } }
     | { case: 'contextInjectionState'; value: { injectionId: string; state?: { state: { case: string | undefined; value?: { reason?: string } } } } }
 }
@@ -42,15 +52,35 @@ export type WireAgentServerMessage = Omit<AgentServerMessage, 'message'> & {
 
 const descriptor = clone(FileDescriptorProtoSchema, file_agent.proto)
 
-const ended = descriptor.messageType.find(message => message.name === 'TurnEndedUpdate')!
-for (const [index, name] of ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens'].entries()) {
-  ended.oneofDecl.push(create(OneofDescriptorProtoSchema, { name: `_${name}` }))
-  ended.field.push(create(FieldDescriptorProtoSchema, {
-    name, jsonName: name.replace(/_([a-z])/gu, (_, letter: string) => letter.toUpperCase()),
-    number: index + 1, label: FieldDescriptorProto_Label.OPTIONAL,
-    type: FieldDescriptorProto_Type.INT64, proto3Optional: true, oneofIndex: index,
-  }))
+// Optional int64 token counters numbered from `first`, as TurnEndedUpdate and
+// ModelCallCompletedUpdate carry them.
+function addTokenCounters(message: (typeof descriptor.messageType)[number], first: number) {
+  for (const [index, name] of ['input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens'].entries()) {
+    const oneofIndex = message.oneofDecl.length
+    message.oneofDecl.push(create(OneofDescriptorProtoSchema, { name: `_${name}` }))
+    message.field.push(create(FieldDescriptorProtoSchema, {
+      name, jsonName: name.replace(/_([a-z])/gu, (_, letter: string) => letter.toUpperCase()),
+      number: index + first, label: FieldDescriptorProto_Label.OPTIONAL,
+      type: FieldDescriptorProto_Type.INT64, proto3Optional: true, oneofIndex,
+    }))
+  }
 }
+addTokenCounters(descriptor.messageType.find(message => message.name === 'TurnEndedUpdate')!, 1)
+// One model call's own usage, sent before the turn's aggregate TurnEndedUpdate.
+// Field numbers follow @magpie-community/opencode-cursor-auth (MIT), usageOf.
+const modelCall = create(DescriptorProtoSchema, {
+  name: 'ModelCallCompletedUpdate',
+  field: [create(FieldDescriptorProtoSchema, {
+    name: 'model_call_id', jsonName: 'modelCallId', number: 1, label: FieldDescriptorProto_Label.OPTIONAL,
+    type: FieldDescriptorProto_Type.STRING,
+  })],
+})
+addTokenCounters(modelCall, 2)
+descriptor.messageType.push(modelCall)
+descriptor.messageType.find(message => message.name === 'InteractionUpdate')!.field.push(create(FieldDescriptorProtoSchema, {
+  name: 'model_call_completed', jsonName: 'modelCallCompleted', number: 31, label: FieldDescriptorProto_Label.OPTIONAL,
+  type: FieldDescriptorProto_Type.MESSAGE, typeName: '.agent.v1.ModelCallCompletedUpdate', oneofIndex: 0,
+}))
 descriptor.messageType.push(create(DescriptorProtoSchema, {
   name: 'ToolRequestsListedUpdate',
   field: [create(FieldDescriptorProtoSchema, {
