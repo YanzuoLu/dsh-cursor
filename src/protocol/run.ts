@@ -141,7 +141,7 @@ class CursorConnection implements CursorRun {
   }
 
   async start(request: AgentRunRequest): Promise<void> {
-    ;(request as AgentRunRequest & { runId: string }).runId = this.runId
+    Object.assign(request as AgentRunRequest & { runId: string; emitModelCallUsage: boolean }, { runId: this.runId, emitModelCallUsage: true })
     this.#pump = this.#read().catch(error => { if (!this.#closed) this.#fail(safeError(error, 'Invalid Cursor Run response')) })
     try {
       await this.#write(create(AgentClientMessageSchema, { message: { case: 'runRequest', value: request } }))

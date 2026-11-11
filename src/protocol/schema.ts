@@ -127,6 +127,9 @@ message('ConversationAction').field.push(field('inject_context_action', 'injectC
 message('InteractionUpdate').field.push(field('context_injection_state', 'contextInjectionState', 23, MESSAGE, '.agent.v1.ContextInjectionStateUpdate', 0))
 // The run id an injection's expected_run_id refers to.
 message('AgentRunRequest').field.push(field('run_id', 'runId', 25, STRING))
+// Asks Cursor for a ModelCallCompletedUpdate after each model call, as
+// @magpie-community/opencode-cursor-auth (MIT) sets it in buildRun.
+message('AgentRunRequest').field.push(field('emit_model_call_usage', 'emitModelCallUsage', 37, FieldDescriptorProto_Type.BOOL))
 
 // CLI-style MCP advertisement. Full definitions are returned on exec #36,
 // not mixed into RequestContext.tools on each new Run.
